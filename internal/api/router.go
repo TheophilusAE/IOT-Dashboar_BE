@@ -41,6 +41,7 @@ func (rt *Router) Build() http.Handler {
 		r.Get("/devices", rt.Devices.List)
 		r.Get("/devices/{id}/status", rt.Devices.Status)
 		r.Get("/stats", rt.Stats.Stats)
+		r.Get("/stats/daily", rt.Stats.DailyStats)
 		r.Get("/detections", rt.Detections.List)
 
 		r.Post("/ingest/heartbeat", rt.Ingest.Heartbeat)

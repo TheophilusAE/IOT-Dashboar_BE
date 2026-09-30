@@ -165,6 +165,73 @@ func (r *DetectionRepo) StatsSince(ctx context.Context, since time.Time, deviceI
 	return Stats{TotalDetections: total, ByType: byType, AvgConfidence: avgConfidence}, nil
 }
 
+// DailyCount is one calendar day's detection counts by waste type.
+type DailyCount struct {
+	Date      time.Time
+	Organic   int64
+	Anorganic int64
+}
+
+// DailyCountsSince buckets detections into calendar days (in since's
+// location) from since's day through today, inclusive. Days with zero
+// detections are explicitly present with zero counts, not omitted, so
+// callers get one point per calendar day in the range.
+func (r *DetectionRepo) DailyCountsSince(ctx context.Context, since time.Time, deviceID *int64) ([]DailyCount, error) {
+	where := "WHERE received_at >= $1"
+	args := []any{since}
+	if deviceID != nil {
+		where += " AND device_id = $2"
+		args = append(args, *deviceID)
+	}
+
+	rows, err := r.pool.Query(ctx, `
+		SELECT waste_type, received_at FROM detection_events `+where, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	loc := since.Location()
+	byDay := map[string]*DailyCount{}
+	for rows.Next() {
+		var bt models.BinType
+		var receivedAt time.Time
+		if err := rows.Scan(&bt, &receivedAt); err != nil {
+			return nil, err
+		}
+		local := receivedAt.In(loc)
+		key := local.Format("2006-01-02")
+		dc, ok := byDay[key]
+		if !ok {
+			dc = &DailyCount{Date: time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)}
+			byDay[key] = dc
+		}
+		switch bt {
+		case models.BinOrganic:
+			dc.Organic++
+		case models.BinAnorganic:
+			dc.Anorganic++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	now := time.Now().In(loc)
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	sinceDay := time.Date(since.Year(), since.Month(), since.Day(), 0, 0, 0, 0, loc)
+
+	result := []DailyCount{}
+	for d := sinceDay; !d.After(todayStart); d = d.AddDate(0, 0, 1) {
+		if dc, ok := byDay[d.Format("2006-01-02")]; ok {
+			result = append(result, *dc)
+		} else {
+			result = append(result, DailyCount{Date: d})
+		}
+	}
+	return result, nil
+}
+
 func (r *DetectionRepo) countsSinceWhere(ctx context.Context, where string, args []any) (map[models.BinType]int64, error) {
 	counts := map[models.BinType]int64{
 		models.BinOrganic:   0,
